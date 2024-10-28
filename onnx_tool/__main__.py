@@ -12,7 +12,7 @@ def get_parser():
     )
     parser.add_argument(
         "-m", "--mode",
-        choices=['profile', 'export_tensors', 'constant_folding', 'io_modify'],
+        choices=['profile', 'export_tensors', 'constant_folding', 'io_modify', 'io_rename'],
         default='profile',
         help="rm_iden: remove Identity layers")
     parser.add_argument(
@@ -33,6 +33,12 @@ def get_parser():
         default=None,
         help='dynamic shape for io tensors as: --dynamic_shapes input:f32:1x3x224x224 scale:f32:1x2:0.25x0.25 '
              'or input:1x3x224x224 input:1x3xhxw'
+    )
+    parser.add_argument(
+        '-r', '--rename',
+        nargs='+',
+        default=None,
+        help='string pairs as: --rename <old_name>#<new_name>'
     )
     parser.add_argument(
         "--fp16",
@@ -85,6 +91,13 @@ def __args2strshapes__(args: [str]):
     return dic
 
 
+def __args2strrename__(args: [str]):
+    dic = {}
+    for arg in args:
+        t = arg.split('#')
+        dic[t[0]] = t[1]
+    return dic
+
 if args.mode == 'profile':
     if args.dynamic_shapes is not None:
         dynamic = __args2dynamicshapes__(args.dynamic_shapes)
@@ -99,3 +112,7 @@ elif args.mode == 'io_modify':
     if args.dynamic_shapes is not None:
         shapedic = __args2strshapes__(args.dynamic_shapes)
         onnx_tool.model_io_modify(args.in_, args.out, shapedic)
+elif args.mode == 'io_rename':
+    if args.rename is not None:
+        rename = __args2strrename__(args.rename)
+        onnx_tool.model_io_rename(args.in_, args.out, rename)

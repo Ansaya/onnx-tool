@@ -184,3 +184,37 @@ def model_opfusion(m, op_type: str, op_name: str, save_file: str, in_tensor_name
     if nodenames is not None:
         graph.fuse_subgraph_node_names(nodenames, nodeop=op_type, name=op_name, keep_attr=keep_attr)
         model.save_model(save_file)
+
+def model_io_rename(m, save_model: str, rename_io):
+    '''
+        Args:
+            m: onnx.ModelProto or file path
+            rename_io: {str:str} e.g. {'input_1':'cam_image'}
+        Returns:
+
+    '''
+    model = loadmodel(m)
+    graph = model.mproto.graph
+    for i in range(len(graph.node)):
+        for j in range(len(graph.node[i].input)):
+            iname = graph.node[i].input[j]
+            if iname in rename_io:
+                graph.node[i].input[j] = rename_io[iname]
+
+        for j in range(len(graph.node[i].output)):
+            oname = graph.node[i].output[j]
+            if oname in rename_io:
+                graph.node[i].output[j] = rename_io[oname]
+
+    for i in range(len(graph.input)):
+        iname = graph.input[i].name
+        if iname in rename_io:
+            graph.input[i].name = rename_io[iname]
+
+    for i in range(len(graph.output)):
+        oname = graph.output[i].name
+        if oname in rename_io:
+            graph.output[i].name = rename_io[oname]
+
+    graph = Graph(graph,utils.ModelConfig({'verbose':True}))
+    graph.save_model(save_model, rawmodel=model.mproto)
