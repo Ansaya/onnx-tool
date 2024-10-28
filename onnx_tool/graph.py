@@ -1331,24 +1331,46 @@ class Graph():
             params_flag_map[key] = 0
 
         self.macs = [0.0, 0.0]
+        self.ins = 0
+        self.mem_in = 0
         self.params = 0
-        self.memory = 0
+        self.mem_params = 0
+        self.ele_load = 0
+        self.mem_load = 0
+        self.outs = 0
+        self.memory_out = 0
         for key in self.nodemap.keys():
             node = self.nodemap[key]
-            itensors = []
+            
+            inshape = [self.tensormap[n].get_shape() for n in node.input]
+            inshape = [(0,)] if len(inshape) == 0 else inshape
+
+            outshape = [self.tensormap[n].get_shape() for n in node.output]
+            outshape = [(0,)] if len(outshape) == 0 else outshape
+            
+            _ins = 0
+            _memory_in = 0
+            _outs = 0
+            _memory_out = 0
             _params = 0
-            _memory = 0
+            _memory_params = 0
             max_sparsity = 0
             block_sparsity = {'blocksize': (1, 1), 'blockratio': 0, 'ratio': 0}
+
+            itensors = []
             for input in node.input:
                 tensor = self.tensormap[input]
                 itensors.append(tensor)
+                elesize = volume(self.tensormap[input].get_shape())
+                memsize = self.tensormap[input].get_memsize()
                 if input in self.initials:
                     if params_flag_map[input] == 0:
-                        elesize = volume(self.tensormap[input].get_shape())
                         _params += elesize
-                        _memory += elesize * self.tensormap[input].get_elementsize()
+                        _memory_params += memsize
                     params_flag_map[input] += 1
+                else:
+                    _ins += elesize
+                    _memory_in += memsize
                 if tensor.sparsity is not None and tensor.sparsity['ratio'] > max_sparsity:
                     max_sparsity = tensor.sparsity['ratio']
                     block_sparsity = tensor.sparsity
@@ -1358,27 +1380,37 @@ class Graph():
                 if node.op_type == 'Constant':
                     # Constant's output tensors are already counted as weight tensors
                     continue
-                _memory += self.tensormap[output].get_memsize()
-            macs = node.profile(itensors, otensors)
-            outshape = (0,)
-            if len(node.output) > 0:
-                outshape = self.tensormap[node.output[0]].get_shape()
-                outshape = (0,) if len(outshape) == 0 else outshape
-            inshape = (0,)
-            if len(node.input) > 0:
-                inshape = self.tensormap[node.input[0]].get_shape()
-                inshape = (0,) if len(inshape) == 0 else inshape
-
-            node.macs = macs
+                _outs += volume(self.tensormap[output].get_shape())
+                _memory_out += self.tensormap[output].get_memsize()
+            
+            _macs = node.profile(itensors, otensors)
+            _macs_per_in = _macs[0] / _ins if _ins else 0
+            _macs_per_out = _macs[0] / _outs if _outs else 0
+            
             node.inshape = inshape
             node.outshape = outshape
+            node.macs = _macs
+            node.macs_per_in = _macs_per_in
+            node.macs_per_out = _macs_per_out
+            node.ins = _ins
+            node.memory_in = _memory_in
+            node.outs = _outs
+            node.memory_out = _memory_out
             node.params = _params
-            node.memory = _memory
+            node.memory_params = _memory_params
+            node.ele_load = _ins + _params
+            node.mem_load = _memory_in + _memory_params
             node.sparsity = block_sparsity
-            self.macs[0] += macs[0]
-            self.macs[1] += macs[1]
+            self.macs[0] += _macs[0]
+            self.macs[1] += _macs[1]
+            self.ins += _ins
+            self.mem_in += _memory_in
             self.params += _params
-            self.memory += _memory
+            self.mem_params += _memory_params
+            self.ele_load += _ins + _params
+            self.mem_load += _memory_in + _memory_params
+            self.outs += _outs
+            self.memory_out += _memory_out
 
         self.valid_profile = True
 
@@ -1403,8 +1435,14 @@ class Graph():
         forward_macs = int(round(self.macs[0]))
         backward_macs = int(round(self.macs[1]))
         backward_valid = backward_macs > 0
+        ins = int(self.ins)
+        mem_in = int(self.mem_in)
         params = int(self.params)
-        memory = int(self.memory)
+        mem_params = int(self.mem_params)
+        ele_load = int(self.ele_load)
+        mem_load = int(self.mem_load)
+        outs = int(self.outs)
+        memory_out = int(self.memory_out)
 
         shared_size = 0
         for key in self.tensormap.keys():
@@ -1445,77 +1483,75 @@ class Graph():
             if exclude_ops is not None and node.op_type in exclude_ops:
                 continue
             row = [key, self.nodemap[key].op_type]
+            row.append(':'.join(tuple2str(n, splitch) for n in node.inshape))
+            row.append(':'.join(tuple2str(n, splitch) for n in node.outshape))
             if print_sparse_table:
                 sparsity = node.sparsity
                 row.append(tuple2str(sparsity['blocksize'], splitch))
                 row.append('{:.2%}'.format(sparsity['blockratio']))
                 row.append('{:.2%}'.format(sparsity['ratio']))
             row.append(num2str(int(node.macs[0]) * factor, csvformat))
-            row.append('{:.2%}'.format(node.macs[0] / forward_macs))
+            row.append('{:.2f}'.format(node.macs_per_in))
+            row.append('{:.2f}'.format(node.macs_per_out))
+            # row.append('{:.2%}'.format(node.macs[0] / forward_macs))
             if backward_valid:
                 row.append(num2str(int(node.macs[1]) * factor, csvformat))
-                row.append('{:.2%}'.format(node.macs[1] / backward_macs))
-            row.append(num2str(int(node.memory), csvformat))
-            row.append('{:.2%}'.format(node.memory / memory))
+                # row.append('{:.2%}'.format(node.macs[1] / backward_macs))
+            row.append(num2str(int(node.ins), csvformat))
+            row.append(num2str(int(node.memory_in), csvformat))
             row.append(num2str(int(node.params), csvformat))
-            row.append('{:.2%}'.format(node.params / params))
-            row.append(tuple2str(node.inshape, splitch))
-            row.append(tuple2str(node.outshape, splitch))
-
+            row.append(num2str(int(node.memory_params), csvformat))
+            row.append(num2str(int(node.ele_load), csvformat))
+            row.append(num2str(int(node.mem_load), csvformat))
+            row.append(num2str(int(node.outs), csvformat))
+            row.append(num2str(int(node.memory_out), csvformat))
+            
             ptable.append(row)
-        row = ['Total', '_']
+        
+        
+        row = [f'{len(self.nodemap)} nodes', f'{len(set(self.nodemap[k].op_type for k in self.nodemap.keys()))} types', '_', '_']
         if print_sparse_table:
             row.append('_')
             row.append('_')
             row.append('_')
         row.append(num2str(int(forward_macs * factor), csvformat))
-        row.append('100%')
+        row.append('{:.3f}'.format(int(forward_macs * factor) / ele_load))
+        row.append('{:.3f}'.format(int(forward_macs * factor) / outs))
+        # row.append('100%')
         if backward_valid:
             row.append(num2str(int(backward_macs * factor), csvformat))
-            row.append('100%')
-        row.append(num2str(int(memory), csvformat))
-        row.append('100%')
+            # row.append('100%')
+        row.append(num2str(int(ins), csvformat))
+        row.append(num2str(int(mem_in), csvformat))
         row.append(num2str(int(params), csvformat))
-        row.append('100%')
-        row.append('_')
-        row.append('_')
+        row.append(num2str(int(mem_params), csvformat))
+        row.append(num2str(int(ele_load), csvformat))
+        row.append(num2str(int(mem_load), csvformat))
+        row.append(num2str(int(outs), csvformat))
+        row.append(num2str(int(memory_out), csvformat))
+        # row.append('100%')
+        # row.append('100%')
 
         ptable.append(row)
-        header = ['Name', 'Type']
+        header = ['Name', 'Type', 'InShape', 'OutShape']
         if print_sparse_table:
             header.append('Sparse Pattern')
             header.append('Sparse Block Ratio')
             header.append('Sparse Ratio')
         header.extend(
-            ['Forward_' + metric, 'FPercent'])
+            ['Forward_' + metric, metric + '/InElem', metric + '/OutElem'])
         if backward_valid:
             header.extend(
-                ['Backward_' + metric, 'BPercent'])
+                ['Backward_' + metric])
         header.extend(
-            ['Memory', 'MPercent', 'Params',
-             'PPercent', 'InShape',
-             'OutShape'])
+            ['In elems', 'In bytes', 'Param elems', 'Param bytes', 'Load elems', 'Load bytes', 'Out elems', 'Store bytes'])
 
         if f is None:
             print(tabulate(ptable, headers=header))
         else:
-            fp = open(f, 'w')
-            if saveformat == 'csv':
-                headerstr = ''
-                for i, item in enumerate(header):
-                    headerstr += item
-                    if i < len(header) - 1:
-                        headerstr += ','
-                headerstr += '\n'
-                fp.write(headerstr)
-                for row in ptable:
-                    str = ''
-                    for i, ele in enumerate(row):
-                        str += ele
-                        if i != len(row) - 1:
-                            str += ','
-                    str += '\n'
-                    fp.write(str)
-            else:
-                fp.write(tabulate(ptable, headers=header))
-            fp.close()
+            with open(f, 'w') as fp:
+                if saveformat == 'csv':
+                    ptable.insert(0, header)
+                    fp.write('\n'.join(','.join(row) for row in ptable))
+                else:
+                    fp.write(tabulate(ptable, headers=header))

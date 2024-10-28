@@ -18,6 +18,7 @@ measure the complexity of the model.
 
 MUL_MACS = 1
 ADD_MACS = 1
+MULADD_MACS = 1
 CMP_MACS = 1
 DIV_MACS = 4  # refers to vrcp14ps
 # following refers to https://github.com/reyoung/avx_mathfun
@@ -1870,7 +1871,7 @@ class ConvNode(Node):
                 outvol = volume(outtensors[0].get_shape())
                 reduce_shape = kernel_shape[1:]
                 reduce_vol = volume(reduce_shape)
-                macs += outvol * reduce_vol * MUL_MACS
+                macs += outvol * reduce_vol * MULADD_MACS
                 if len(intensors) > 2:
                     macs += (outvol * ADD_MACS)
         return [macs, 0]
